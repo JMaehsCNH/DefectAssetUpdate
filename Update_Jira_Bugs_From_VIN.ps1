@@ -74,9 +74,7 @@ foreach ($issue in $response.issues) {
             "customfield_13089" = $chosen.companyName
             "customfield_13094" = $chosen.devices.tdac
             "customfield_13318" = $chosen.devices.deviceBundleVersion
-            # Removed other fields not needed for Bug update
-            "customfield_13094" = $chosen.devices.tdac
-            "customfield_13318" = $chosen.devices.deviceBundleVersion
+
         }
     } | ConvertTo-Json -Depth 10
 
