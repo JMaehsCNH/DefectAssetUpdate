@@ -1,0 +1,27 @@
+name: Update Jira Bugs from VIN
+
+on:
+  workflow_dispatch:  # Manual trigger from GitHub UI
+  schedule:
+    - cron: '0 14 * * *'  # 8 AM CST
+    - cron: '0 16 * * *'  # 10 AM CST
+    - cron: '0 18 * * *'  # 12 PM CST
+    - cron: '0 20 * * *'  # 2 PM CST
+    - cron: '0 22 * * *'  # 4 PM CST
+
+jobs:
+  run-update:
+    runs-on: windows-latest  # Needed to run PowerShell on Windows
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Run PowerShell script to update Jira Bugs
+        env:
+          jiraEmail: john.maehs@cnh.com
+          jiraToken: ${{ secrets.JIRA_TOKEN }}
+          subsKeyGSSProd: ${{ secrets.SUBS_KEY_PROD }}
+          subsKeyGSSMkt: ${{ secrets.SUBS_KEY_MKT }}
+        run: |
+          pwsh ./Update_Jira_Bugs_From_VIN.ps1
