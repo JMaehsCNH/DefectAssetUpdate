@@ -31,7 +31,7 @@ if ([string]::IsNullOrWhiteSpace($jiraToken)) {
 }
 
 # === QUERY JIRA ISSUES (new /search/jql with nextPageToken) ===
-$jql = "project = $projectKey AND issuetype = '$issueType'"
+$jql = "project = PREC AND issuetype = 'Bug'"
 $searchUrl = "$jiraBaseUrl/rest/api/3/search/jql"
 
 $body = @{
