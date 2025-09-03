@@ -19,22 +19,40 @@ $headers = @{
 $headerExtProd = @{ 'Ocp-Apim-Subscription-Key' = $subsKeyGSSProd }
 $headerExtMkt  = @{ 'Ocp-Apim-Subscription-Key' = $subsKeyGSSMkt }
 
-# === QUERY JIRA ISSUES ===
+# === QUERY JIRA ISSUES (new /search/jql with nextPageToken) ===
 $jql = "project = $projectKey AND issuetype = '$issueType'"
 $searchUrl = "$jiraBaseUrl/rest/api/3/search/jql"
 
-$searchBody = @{
-    jql = $jql
-    maxResults = 100
-    fields = @("customfield_13087","customfield_13089")
-} | ConvertTo-Json -Depth 3
+$body = @{
+  jql        = $jql
+  maxResults = 100
+  fields     = @("customfield_13087","customfield_13089")  # VIN + companyName (adjust if needed)
+} 
 
-$response = Invoke-RestMethod -Uri $searchUrl -Method Post -Headers $headers -Body $searchBody
+$allIssues = @()
+$nextPageToken = $null
 
-foreach ($issue in $response.issues) {
+do {
+    $payload = $body.Clone()
+    if ($nextPageToken) { $payload["nextPageToken"] = $nextPageToken }
+
+    $json = $payload | ConvertTo-Json -Depth 5
+    $resp = Invoke-RestMethod -Uri $searchUrl -Method Post -Headers $headers -Body $json
+
+    if ($resp.issues) { $allIssues += $resp.issues }
+
+    # New pagination model
+    if ($resp.isLast -eq $true) {
+        $nextPageToken = $null
+    } else {
+        $nextPageToken = $resp.nextPageToken
+    }
+} while ($nextPageToken)
+
+# Now iterate all issues as before
+foreach ($issue in $allIssues) {
     $issueId = $issue.id
-    $vin = $issue.fields.customfield_13087
-
+    $vin     = $issue.fields.customfield_13087
     Write-Host "`n🔍 Processing VIN: $vin (Jira ID: $issueId)"
 
     # ✅ Build GSS API URLs
