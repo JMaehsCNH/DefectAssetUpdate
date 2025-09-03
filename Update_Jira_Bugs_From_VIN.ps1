@@ -21,7 +21,7 @@ $headerExtMkt  = @{ 'Ocp-Apim-Subscription-Key' = $subsKeyGSSMkt }
 
 # === QUERY JIRA ISSUES ===
 $jql = "project = $projectKey AND issuetype = '$issueType'"
-$searchUrl = "$jiraBaseUrl/rest/api/3/search"
+$searchUrl = "$jiraBaseUrl/rest/api/3/search/jql"
 
 $searchBody = @{
     jql = $jql
