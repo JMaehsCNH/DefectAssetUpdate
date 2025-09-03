@@ -85,6 +85,50 @@ if ($allIssues.Count -eq 0) {
   Write-Host "ℹ️ No issues matched your JQL. Double-check project, issue type, and filters."
   exit 0
 }
+# ---- QUICK PROBE USING A KNOWN ISSUE KEY ----
+$knownIssueKey = "PREC-382"   # <- set this to a real bug you can see in the UI
+
+try {
+  $one = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/issue/$knownIssueKey?fields=issuetype,project" -Headers $headers -Method Get
+  $actualProject = $one.fields.project.key
+  $actualType    = $one.fields.issuetype.name
+  Write-Host "🔎 Known issue $knownIssueKey -> project=$actualProject  issuetype='$actualType'"
+
+  if ($actualProject -ne $projectKey) {
+    Write-Host "❌ That issue isn't in project $projectKey. You're querying the wrong project key."
+  }
+
+  # Check Browse permission explicitly on PREC
+  $perm = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/mypermissions?projectKey=$projectKey" -Headers $headers -Method Get
+  Write-Host ("🔑 Browse Projects on {0}: {1}" -f $projectKey, $perm.permissions.BROWSE_PROJECTS.havePermission)
+
+  # Try the same JQL but with the EXACT issuetype name taken from the known issue
+  $probeBody = @{
+    jql        = "project = $projectKey AND issuetype = '$actualType'"
+    maxResults = 1
+    fields     = @("key")
+  } | ConvertTo-Json -Depth 4
+
+  $probe = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/search/jql" -Method Post -Headers $headers -Body $probeBody
+  Write-Host ("🐞 Probe count for exact issuetype '{0}': {1}" -f $actualType, ($probe.total | ForEach-Object { $_ } ))
+
+  if ($probe.total -eq 0) {
+    Write-Host "⚠️ API sees zero '{0}' issues in {1}. Either Browse is false, or Bugs exist only in UI filters/boards, or the site/project key is different." -f $actualType, $projectKey
+  } else {
+    # If this returns >0, use this exact name in your main JQL
+    $script:issueType = $actualType
+    $script:jql       = "project = $projectKey AND issuetype = '$actualType'"
+    Write-Host "✅ Using issuetype '$actualType' for main search."
+  }
+} catch {
+  Write-Host "⚠️ Could not fetch $knownIssueKey via API. That means auth/site/project mismatch or no Browse permission."
+  if ($_.Exception.Response) {
+    $sr = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
+    Write-Host ($sr.ReadToEnd())
+  } else {
+    Write-Host $_.Exception.Message
+  }
+}
 
 # === PROCESS ISSUES ===
 foreach ($issue in $allIssues) {
