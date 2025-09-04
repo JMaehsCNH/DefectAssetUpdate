@@ -127,7 +127,9 @@ if ($allIssues.Count -eq 0) {
 
   # 1) Browse permission on the project
   try {
-    $permProj = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/mypermissions?projectKey=$projectKey" -Headers $headers -Method Get
+    $permProj = Invoke-RestMethod `
+      -Uri "$jiraBaseUrl/rest/api/3/mypermissions?projectKey=$projectKey&permissions=BROWSE_PROJECTS" `
+      -Headers $headers -Method Get
     $canBrowse = $permProj.permissions.BROWSE_PROJECTS.havePermission
     Write-Host ("🔑 Browse Projects on {0}: {1}", $projectKey, $canBrowse)
   } catch {
@@ -208,17 +210,27 @@ foreach ($issue in $allIssues) {
 
   # --- B) Check my permission to edit this issue ---
   # Try issueId first; if it errors, fall back to issueKey
-  $permUrl = "$jiraBaseUrl/rest/api/3/mypermissions?issueId=$issueId"
+  $permBase = "$jiraBaseUrl/rest/api/3/mypermissions?permissions=BROWSE_PROJECTS,EDIT_ISSUES"
+  $permUrl  = "$permBase&issueId=$issueId"
   try {
     $perm = Invoke-RestMethod -Uri $permUrl -Method Get -Headers $headers
   } catch {
     Show-HttpError $_ "mypermissions by issueId failed, retrying with issueKey"
     try {
-      $perm = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/mypermissions?issueKey=$issueKey" -Method Get -Headers $headers
+      $perm = Invoke-RestMethod -Uri "$permBase&issueKey=$issueKey" -Method Get -Headers $headers
     } catch {
       Show-HttpError $_ "Failed to check permissions for $issueKey"
+      # If you prefer to continue without the check, comment the next line:
       continue
     }
+  }
+  
+  $canBrowse = $perm.permissions.BROWSE_PROJECTS.havePermission
+  $canEdit   = $perm.permissions.EDIT_ISSUES.havePermission
+  Write-Host "🔑 Browse: $canBrowse  |  Edit: $canEdit"
+  if (-not $canEdit) {
+    Write-Host "❌ No 'Edit Issues' permission on $issueKey. Skipping."
+    continue
   }
   $canEdit = $perm.permissions.EDIT_ISSUES.havePermission
   Write-Host "🔑 Edit permission: $canEdit"
