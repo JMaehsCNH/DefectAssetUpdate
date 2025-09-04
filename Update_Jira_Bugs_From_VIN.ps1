@@ -82,53 +82,95 @@ do {
 
 Write-Host "`n📊 Total issues fetched: $($allIssues.Count)"
 if ($allIssues.Count -eq 0) {
-  Write-Host "ℹ️ No issues matched your JQL. Double-check project, issue type, and filters."
-  exit 0
+  Write-Host "ℹ️ No issues matched your JQL. Running discovery probes..."
+
+  # 0) Verify who we are (token ↔ account)
+  try {
+    $me = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/myself" -Headers $headers -Method Get
+    Write-Host ("👤 Auth OK as: {0} ({1})" -f $me.displayName, $me.emailAddress)
+  } catch {
+    Write-Host "❌ /myself failed; token/email mismatch or wrong site."
+    throw
+  }
+
+  # 1) Browse permission on the project
+  try {
+    $permProj = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/mypermissions?projectKey=$projectKey" -Headers $headers -Method Get
+    $canBrowse = $permProj.permissions.BROWSE_PROJECTS.havePermission
+    Write-Host ("🔑 Browse Projects on {0}: {1}", $projectKey, $canBrowse)
+  } catch {
+    Write-Host "⚠️ Could not query mypermissions: $($_.Exception.Message)"
+  }
+
+  # 2) Try a known key to prove visibility & get the exact issuetype name
+  $knownIssueKey = "PREC-382"   # <-- update to a real key you see in the UI
+  $actualType = $null
+  try {
+    $one = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/issue/$knownIssueKey?fields=issuetype,project" -Headers $headers -Method Get
+    $actualProject = $one.fields.project.key
+    $actualType    = $one.fields.issuetype.name
+    Write-Host "🔎 Known issue $knownIssueKey -> project=$actualProject  issuetype='$actualType'"
+  } catch {
+    Write-Host "❌ GET /issue/$knownIssueKey failed (no Browse permission or wrong site/project)."
+    if ($_.Exception.Response) {
+      $sr = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
+      Write-Host ($sr.ReadToEnd())
+    } else { Write-Host $_.Exception.Message }
+  }
+
+  # 3) List a few recent issues from PREC to confirm API visibility
+  try {
+    $sampleBody = @{
+      jql        = "project = $projectKey ORDER BY created DESC"
+      maxResults = 10
+      fields     = @("key","issuetype","summary","status")
+    } | ConvertTo-Json -Depth 5
+
+    $sample = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/search/jql" -Method Post -Headers $headers -Body $sampleBody
+    Write-Host ("📋 Recent in {0}: {1}", $projectKey, (@($sample.issues).Count))
+    foreach ($it in $sample.issues) {
+      Write-Host ("  • {0}  [{1}]  {2}", $it.key, $it.fields.issuetype.name, $it.fields.summary)
+    }
+  } catch {
+    Write-Host "⚠️ Sample fetch failed: $($_.Exception.Message)"
+  }
+
+  # 4) If we got a real issuetype name from the known key, probe with that
+  if ($actualType) {
+    $probeBody = @{
+      jql        = "project = $projectKey AND issuetype = '$actualType'"
+      maxResults = 1
+      fields     = @("key")
+    } | ConvertTo-Json -Depth 4
+
+    $probe = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/search/jql" -Method Post -Headers $headers -Body $probeBody
+    $probeTotal = [int]$probe.total
+    Write-Host ("🐞 Probe count for exact issuetype '{0}': {1}", $actualType, $probeTotal)
+
+    if ($probeTotal -gt 0) {
+      # Retry main search using the issuetype string Jira actually stores on your site
+      $retryBody = @{
+        jql        = "project = $projectKey AND issuetype = '$actualType'"
+        maxResults = 100
+        fields     = @("customfield_13087","customfield_13089")
+      } | ConvertTo-Json -Depth 5
+
+      $retry = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/search/jql" -Method Post -Headers $headers -Body $retryBody
+      $script:allIssues = $retry.issues
+      Write-Host ("↩️  Retry found {0} issues. Continuing with update loop.", (@($allIssues).Count))
+    }
+  }
+
+  # If we still have nothing, stop here with a clear message
+  if (-not $allIssues -or $allIssues.Count -eq 0) {
+    Write-Host "🛑 Still zero via API. Likely causes:"
+    Write-Host "  • The API user/token cannot *Browse* the project or is a different account than the one in the UI."
+    Write-Host "  • Issue Security Level hides Bugs from this account."
+    Write-Host "  • Different site or project key."
+    exit 0
+  }
 }
-# ---- QUICK PROBE USING A KNOWN ISSUE KEY ----
-$knownIssueKey = "PREC-382"   # <- set this to a real bug you can see in the UI
 
-try {
-  $one = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/issue/$knownIssueKey?fields=issuetype,project" -Headers $headers -Method Get
-  $actualProject = $one.fields.project.key
-  $actualType    = $one.fields.issuetype.name
-  Write-Host "🔎 Known issue $knownIssueKey -> project=$actualProject  issuetype='$actualType'"
-
-  if ($actualProject -ne $projectKey) {
-    Write-Host "❌ That issue isn't in project $projectKey. You're querying the wrong project key."
-  }
-
-  # Check Browse permission explicitly on PREC
-  $perm = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/mypermissions?projectKey=$projectKey" -Headers $headers -Method Get
-  Write-Host ("🔑 Browse Projects on {0}: {1}" -f $projectKey, $perm.permissions.BROWSE_PROJECTS.havePermission)
-
-  # Try the same JQL but with the EXACT issuetype name taken from the known issue
-  $probeBody = @{
-    jql        = "project = $projectKey AND issuetype = '$actualType'"
-    maxResults = 1
-    fields     = @("key")
-  } | ConvertTo-Json -Depth 4
-
-  $probe = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/search/jql" -Method Post -Headers $headers -Body $probeBody
-  Write-Host ("🐞 Probe count for exact issuetype '{0}': {1}" -f $actualType, ($probe.total | ForEach-Object { $_ } ))
-
-  if ($probe.total -eq 0) {
-    Write-Host "⚠️ API sees zero '{0}' issues in {1}. Either Browse is false, or Bugs exist only in UI filters/boards, or the site/project key is different." -f $actualType, $projectKey
-  } else {
-    # If this returns >0, use this exact name in your main JQL
-    $script:issueType = $actualType
-    $script:jql       = "project = $projectKey AND issuetype = '$actualType'"
-    Write-Host "✅ Using issuetype '$actualType' for main search."
-  }
-} catch {
-  Write-Host "⚠️ Could not fetch $knownIssueKey via API. That means auth/site/project mismatch or no Browse permission."
-  if ($_.Exception.Response) {
-    $sr = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
-    Write-Host ($sr.ReadToEnd())
-  } else {
-    Write-Host $_.Exception.Message
-  }
-}
 
 # === PROCESS ISSUES ===
 foreach ($issue in $allIssues) {
