@@ -1,6 +1,45 @@
 # Fail fast on errors so we see the first real issue
 $ErrorActionPreference = 'Stop'
 
+# ---------- Unified HTTP error renderer (works in PS7) ----------
+function Show-HttpError {
+  param($err, [string]$context = "")
+  try {
+    if ($context) { Write-Host "❌ $context" }
+
+    # PS7: HttpResponseMessage
+    if ($err.Exception.Response -is [System.Net.Http.HttpResponseMessage]) {
+      $resp   = $err.Exception.Response
+      $code   = [int]$resp.StatusCode
+      $reason = $resp.ReasonPhrase
+      $body   = $err.ErrorDetails.Message
+      Write-Host "HTTP $code $reason"
+      if ($body) { Write-Host $body } else {
+        $raw = $resp.Content.ReadAsStringAsync().Result
+        if ($raw) { Write-Host $raw }
+      }
+      return
+    }
+
+    # Windows PowerShell / WebException fallback
+    if ($err.Exception.Response -and $err.Exception.Response.GetResponseStream) {
+      $sr = New-Object IO.StreamReader($err.Exception.Response.GetResponseStream())
+      $txt = $sr.ReadToEnd()
+      Write-Host $txt
+      return
+    }
+
+    # Last resort
+    if ($err.ErrorDetails -and $err.ErrorDetails.Message) {
+      Write-Host $err.ErrorDetails.Message
+    } else {
+      Write-Host $err.Exception.Message
+    }
+  } catch {
+    Write-Host "⚠️ Failed to render error details: $($_.Exception.Message)"
+  }
+}
+
 # === CONFIGURATION ===
 $jiraBaseUrl = "https://cnhpd.atlassian.net"
 $jiraEmail   = "john.maehs@cnh.com"
@@ -58,14 +97,7 @@ do {
   try {
     $resp = Invoke-RestMethod -Uri $searchUrl -Method Post -Headers $headers -Body $json
   } catch {
-    Write-Host "❌ Search failed."
-    if ($_.Exception.Response) {
-      $sr = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
-      $errBody = $sr.ReadToEnd()
-      Write-Host $errBody
-    } else {
-      Write-Host $_.Exception.Message
-    }
+    Show-HttpError $_ "Search failed."
     throw
   }
 
@@ -89,7 +121,7 @@ if ($allIssues.Count -eq 0) {
     $me = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/myself" -Headers $headers -Method Get
     Write-Host ("👤 Auth OK as: {0} ({1})" -f $me.displayName, $me.emailAddress)
   } catch {
-    Write-Host "❌ /myself failed; token/email mismatch or wrong site."
+    Show-HttpError $_ "/myself failed; token/email mismatch or wrong site."
     throw
   }
 
@@ -99,7 +131,7 @@ if ($allIssues.Count -eq 0) {
     $canBrowse = $permProj.permissions.BROWSE_PROJECTS.havePermission
     Write-Host ("🔑 Browse Projects on {0}: {1}", $projectKey, $canBrowse)
   } catch {
-    Write-Host "⚠️ Could not query mypermissions: $($_.Exception.Message)"
+    Show-HttpError $_ "Could not query mypermissions"
   }
 
   # 2) Try a known key to prove visibility & get the exact issuetype name
@@ -111,11 +143,7 @@ if ($allIssues.Count -eq 0) {
     $actualType    = $one.fields.issuetype.name
     Write-Host "🔎 Known issue $knownIssueKey -> project=$actualProject  issuetype='$actualType'"
   } catch {
-    Write-Host "❌ GET /issue/$knownIssueKey failed (no Browse permission or wrong site/project)."
-    if ($_.Exception.Response) {
-      $sr = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
-      Write-Host ($sr.ReadToEnd())
-    } else { Write-Host $_.Exception.Message }
+    Show-HttpError $_ "GET /issue/$knownIssueKey failed (no Browse permission or wrong site/project)."
   }
 
   # 3) List a few recent issues from PREC to confirm API visibility
@@ -132,7 +160,7 @@ if ($allIssues.Count -eq 0) {
       Write-Host ("  • {0}  [{1}]  {2}", $it.key, $it.fields.issuetype.name, $it.fields.summary)
     }
   } catch {
-    Write-Host "⚠️ Sample fetch failed: $($_.Exception.Message)"
+    Show-HttpError $_ "Sample fetch failed"
   }
 
   # 4) If we got a real issuetype name from the known key, probe with that
@@ -171,40 +199,37 @@ if ($allIssues.Count -eq 0) {
   }
 }
 
-
 # === PROCESS ISSUES ===
 foreach ($issue in $allIssues) {
-  $issueId = $issue.id
+  $issueId  = $issue.id
   $issueKey = $issue.key
-  $vin = $issue.fields.customfield_13087
+  $vin      = $issue.fields.customfield_13087
   Write-Host "`n🔍 Processing: $issueKey (ID: $issueId)  VIN: $vin"
 
   # --- B) Check my permission to edit this issue ---
+  # Try issueId first; if it errors, fall back to issueKey
   $permUrl = "$jiraBaseUrl/rest/api/3/mypermissions?issueId=$issueId"
   try {
     $perm = Invoke-RestMethod -Uri $permUrl -Method Get -Headers $headers
-    $canEdit = $perm.permissions.EDIT_ISSUES.havePermission
-    Write-Host "🔑 Edit permission: $canEdit"
-    if (-not $canEdit) {
-      Write-Host "❌ No 'Edit Issues' permission on $issueKey. Skipping."
+  } catch {
+    Show-HttpError $_ "mypermissions by issueId failed, retrying with issueKey"
+    try {
+      $perm = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/mypermissions?issueKey=$issueKey" -Method Get -Headers $headers
+    } catch {
+      Show-HttpError $_ "Failed to check permissions for $issueKey"
       continue
     }
-  } catch {
-    Write-Host "⚠️ Failed to check permissions for $issueKey"
-    if ($_.Exception.Response) {
-      $sr = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
-      $errBody = $sr.ReadToEnd()
-      Write-Host $errBody
-    } else {
-      Write-Host $_.Exception.Message
-    }
+  }
+  $canEdit = $perm.permissions.EDIT_ISSUES.havePermission
+  Write-Host "🔑 Edit permission: $canEdit"
+  if (-not $canEdit) {
+    Write-Host "❌ No 'Edit Issues' permission on $issueKey. Skipping."
     continue
   }
 
   # --- C1) Map names ↔ IDs to confirm customfield IDs are right ---
   try {
-    $withNames = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/issue/$issueId?expand=names" `
-                                   -Headers $headers -Method Get
+    $withNames = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/issue/$issueId?expand=names" -Headers $headers -Method Get
     Write-Host "🧭 Field name map:"
     Write-Host "    customfield_13087 => $($withNames.names.customfield_13087)"
     Write-Host "    customfield_13089 => $($withNames.names.customfield_13089)"
@@ -217,8 +242,7 @@ foreach ($issue in $allIssues) {
 
   # --- C2) Check which fields are editable on this issue ---
   try {
-    $editMeta = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/issue/$issueId/editmeta" `
-                                  -Headers $headers -Method Get
+    $editMeta = Invoke-RestMethod -Uri "$jiraBaseUrl/rest/api/3/issue/$issueId/editmeta" -Headers $headers -Method Get
     $editable = $editMeta.fields.PSObject.Properties.Name
     $editableSample = ($editable | Select-Object -First 20) -join ", "
     Write-Host "🛠️  Editable fields (sample): $editableSample"
@@ -296,17 +320,7 @@ foreach ($issue in $allIssues) {
     $respUpd = Invoke-WebRequest -Uri $updateUrl -Method Put -Headers $headers -Body $updateFields
     Write-Host "✅ Updated $issueKey (HTTP $($respUpd.StatusCode))"
   } catch {
-    Write-Host "❌ Failed to update $issueKey"
-    if ($_.Exception.Response) {
-      $sr = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
-      $errBody = $sr.ReadToEnd()
-      $code = [int]$_.Exception.Response.StatusCode
-      $desc = $_.Exception.Response.StatusDescription
-      Write-Host "HTTP $code $desc"
-      Write-Host $errBody
-    } else {
-      Write-Host $_.Exception.Message
-    }
+    Show-HttpError $_ "Failed to update $issueKey"
     continue
   }
 }
