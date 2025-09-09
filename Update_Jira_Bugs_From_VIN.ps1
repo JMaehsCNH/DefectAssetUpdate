@@ -316,8 +316,14 @@ foreach ($issue in $allIssues) {
   if ($chosen.companyName)                             { $fieldsToSet["customfield_13089"] = $chosen.companyName }
   if ($chosen.devices -and $chosen.devices.tdac)       { $fieldsToSet["customfield_13094"] = $chosen.devices.tdac }
   if ($chosen.devices -and $chosen.devices.deviceBundleVersion) { $fieldsToSet["customfield_13318"] = $chosen.devices.deviceBundleVersion }
-  if ($chosen.pos.lat)                                 { $fieldsToSet["customfield_13097"] = $chosen.pos.lat }
-  if ($chosen.pos.lon)                                 { $fieldsToSet["customfield_13098"] = $chosen.pos.lon }
+  
+  # use discovered IDs if present, else your current ones
+  $latId = if ($latField) { $latField.Id } else { "customfield_13097" }
+  $lonId = if ($lonField) { $lonField.Id } else { "customfield_13098" }
+  
+  if ($chosen.pos.lat) { $fieldsToSet[$latId] = [double]$chosen.pos.lat }
+  if ($chosen.pos.lon) { $fieldsToSet[$lonId] = [double]$chosen.pos.lon }
+
   
   if ($fieldsToSet.Keys.Count -eq 0) {
     Write-Host "⚠️ Nothing to update for $issueKey (all values null/missing)."
