@@ -260,7 +260,7 @@ foreach ($issue in $allIssues) {
     $editable = $editMeta.fields.PSObject.Properties.Name
     $editableSample = ($editable | Select-Object -First 20) -join ", "
     Write-Host "🛠️  Editable fields (sample): $editableSample"
-    $requiredFields = @('customfield_13088','customfield_13089','customfield_13094','customfield_13318')
+    $requiredFields = @('customfield_13088','customfield_13089','customfield_13094','customfield_13318','customfield_13098','customfield_13097')
     foreach ($f in $requiredFields) {
       if ($editable -notcontains $f) {
         Write-Host "⚠️ $f is NOT editable on $issueKey (may be wrong context/screen)."
