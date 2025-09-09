@@ -248,6 +248,8 @@ foreach ($issue in $allIssues) {
     Write-Host "    customfield_13088 => $($withNames.names.customfield_13088)"
     Write-Host "    customfield_13094 => $($withNames.names.customfield_13094)"
     Write-Host "    customfield_13318 => $($withNames.names.customfield_13318)"
+    Write-Host "    customfield_13097 => $($withNames.names.customfield_13097)"
+    Write-Host "    customfield_13098 => $($withNames.names.customfield_13098)"
   } catch {
     Write-Host "⚠️ Could not fetch names map; continuing."
   }
