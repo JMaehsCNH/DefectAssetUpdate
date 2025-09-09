@@ -345,4 +345,21 @@ foreach ($issue in $allIssues) {
     Show-HttpError $_ "Failed to update $issueKey"
     continue
   }
+  # Read back exactly what Jira stored for THESE fields
+$verify = Invoke-RestMethod `
+  -Uri "$jiraBaseUrl/rest/api/3/issue/$issueId?fields=customfield_13097,customfield_13098&expand=changelog" `
+  -Headers $headers -Method Get
+
+$latNow = $verify.fields.customfield_13097
+$lonNow = $verify.fields.customfield_13098
+Write-Host ("🔎 Echo from server: 13097(lat)={0}  13098(lon)={1}" -f $latNow, $lonNow)
+
+# See if something is immediately overwriting them (post-function/automation)
+$lastChanges = $verify.changelog.histories | Select-Object -Last 1
+if ($lastChanges) {
+  $items = ($lastChanges.items | Where-Object {$_.field -match '13097|13098' })
+  if ($items) {
+    Write-Host "🧭 Last change mentions lat/lon:"
+    $items | ForEach-Object { Write-Host ("  • {0}: {1} -> {2}" -f $_.field, $_.fromString, $_.toString) }
+  }
 }
