@@ -270,6 +270,11 @@ foreach ($issue in $allIssues) {
     }
   } catch {
     Write-Host "⚠️ Could not fetch editmeta; continuing."
+    $latSchema = $editMeta.fields.'customfield_13097'.schema
+    $lonSchema = $editMeta.fields.'customfield_13098'.schema
+    Write-Host ("🧬 13097 schema: type={0} custom={1}" -f $latSchema.type, $latSchema.custom)
+    Write-Host ("🧬 13098 schema: type={0} custom={1}" -f $lonSchema.type, $lonSchema.custom)
+
   }
 
   # --- External API calls (your existing logic) ---
@@ -344,22 +349,5 @@ foreach ($issue in $allIssues) {
   } catch {
     Show-HttpError $_ "Failed to update $issueKey"
     continue
-  }
-  # Read back exactly what Jira stored for THESE fields
-$verify = Invoke-RestMethod `
-  -Uri "$jiraBaseUrl/rest/api/3/issue/$issueId?fields=customfield_13097,customfield_13098&expand=changelog" `
-  -Headers $headers -Method Get
-
-$latNow = $verify.fields.customfield_13097
-$lonNow = $verify.fields.customfield_13098
-Write-Host ("🔎 Echo from server: 13097(lat)={0}  13098(lon)={1}" -f $latNow, $lonNow)
-
-# See if something is immediately overwriting them (post-function/automation)
-$lastChanges = $verify.changelog.histories | Select-Object -Last 1
-if ($lastChanges) {
-  $items = ($lastChanges.items | Where-Object {$_.field -match '13097|13098' })
-  if ($items) {
-    Write-Host "🧭 Last change mentions lat/lon:"
-    $items | ForEach-Object { Write-Host ("  • {0}: {1} -> {2}" -f $_.field, $_.fromString, $_.toString) }
   }
 }
